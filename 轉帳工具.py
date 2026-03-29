@@ -20,7 +20,7 @@ def parse_data(trans_text, people_text, buffer_val):
     for line in people_text.split('\n'):
         if not line.strip(): continue
         # 解析「名字 有 金額」
-        match = re.search(r'(\w+)有\s*(\d+)', line)
+        match = re.search(r'(\w+),\s*(\d+)', line)
         if match:
             bal = int(match.group(2))
             people_list.append({
