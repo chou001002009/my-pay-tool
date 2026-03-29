@@ -94,8 +94,24 @@ with tab1:
                         msg += f"---\n總計：{p['out']:,}\n剩餘：{final_bal:,}"
                         st.code(msg, language="text")
 
-            if unassigned:
-                st.error(f"⚠️ 額度不足！剩餘 {len(unassigned)} 筆未分配。")
+            # --- 5. 顯示未分配的部分 (重點修正) ---
+         if unassigned:
+            st.divider()
+            st.error(f"⚠️ 額度不足！剩餘 {len(unassigned)} 筆未分配。")
+            
+            # 建立未分配清單的文字
+            un_msg = "❌ 以下帳號因額度不足尚未分配：\n"
+            total_un = 0
+            for i, u in enumerate(unassigned, 1):
+                un_msg += f"{i}. {u['info']} 轉 {u['amount']:,}\n"
+                total_un += u['amount']
+            un_msg += f"---\n待分配總額：{total_un:,}"
+            
+            # 使用 st.code 顯示，方便你複製或對帳
+            st.code(un_msg, language="text")
+            
+            # 也可以額外加一個小提示，告訴你目前還差多少錢
+            st.warning(f"💡 建議：你需要再補大約 {total_un:,} 元的額度，或調低左側的「留底金額」。")
         else:
             st.warning("請輸入內容。")
 
