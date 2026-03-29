@@ -52,7 +52,7 @@ with st.sidebar:
     buffer_val = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
     st.divider()
     st.subheader("👥 常用人員勾選")
-    all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運"]
+    all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運","我"]
     selected = st.multiselect("參與人員：", options=all_names, default=all_names)
     if st.button("📝 生成所選人員名單"):
         st.session_state["input_p"] = "\n".join([f"{n} , 0" for n in selected])
