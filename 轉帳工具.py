@@ -108,4 +108,64 @@ with tab1:
                 try:
                     conn = st.connection("gsheets", type=GSheetsConnection)
                     df = conn.read(worksheet="Sheet1", ttl=0)
-                    if df
+                    if df.empty: 
+                        st.warning("雲端目前沒有資料可更新")
+                    else:
+                        up_cnt = 0
+                        for p in st.session_state.current_results:
+                            for t in p['tasks']:
+                                t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
+                                if st.session_state.get(t_key, False):
+                                    m = (
+                                        (df['執行人'].astype(str).apply(clean_txt) == clean_txt(p['name'])) &
+                                        (df['帳號'].apply(clean_num) == clean_num(t['info'])) &
+                                        (df['金額'].apply(clean_num) == clean_num(t['amount'])) &
+                                        (df['狀態'].str.strip() == "未完成")
+                                    )
+                                    if m.any():
+                                        df.at[df[m].index[-1], '狀態'] = "完成"
+                                        up_cnt += 1
+                        if up_cnt > 0:
+                            conn.update(worksheet="Sheet1", data=df)
+                            st.success(f"🎯 成功將 {up_cnt} 筆任務同步為完成！")
+                            st.rerun()
+                        else: 
+                            st.info("沒有偵測到新勾選的未完成項目。")
+                except Exception as e: 
+                    st.error(f"更新失敗: {e}")
+            else: 
+                st.warning("請先執行分配。")
+
+    with c3:
+        if st.button("🗑️ 清空", use_container_width=True):
+            st.session_state.current_results = None
+            st.rerun()
+
+    # --- 顯示分配卡片 ---
+    if st.session_state.current_results:
+        st.divider()
+        for p in st.session_state.current_results:
+            with st.container(border=True):
+                st.success(f"### {p['name']} (總計: {p['out']:,})")
+                
+                # 任務文字預覽 (修正後的行號)
+                task_lines = []
+                for i, tk in enumerate(p['tasks']):
+                    task_lines.append(f"{i+1}. {tk['info']} 轉 {tk['amount']:,}")
+                
+                msg = f"{p['name']}任務：\n" + "\n".join(task_lines)
+                st.code(msg, language="text")
+                
+                # 手動核對打勾
+                for tk in p['tasks']:
+                    st.checkbox(f"金額 {tk['amount']:,} ({tk['info']})", key=f"chk_{p['name']}_{tk['info']}_{tk['amount']}")
+
+with tab2:
+    if st.button("🔄 刷新雲端顯示"): 
+        st.rerun()
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        st.dataframe(df.iloc[::-1], use_container_width=True)
+    except: 
+        st.info("尚無雲端資料。")
