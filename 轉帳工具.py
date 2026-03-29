@@ -45,7 +45,7 @@ with tab1:
         people_list = []
         for line in people_text.split('\n'):
             if not line.strip(): continue
-            match = re.search(r'(\w+)有\s*(\d+)', line)
+            match = re.search(r'(\w+),\s*(\d+)', line)
             if match:
                 bal = int(match.group(2))
                 people_list.append({'name': match.group(1), 'bal': bal, 'limit': bal - buffer_amt, 'tasks': [], 'out': 0})
