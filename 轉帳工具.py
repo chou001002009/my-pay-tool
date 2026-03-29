@@ -108,52 +108,6 @@ with tab1:
             st.divider()
             st.error(f"⚠️ 還有 {len(unassigned_results)} 筆未分配，請檢查額度。")
 
-            # 記錄到歷史清單
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for p in people_list:
-                if p['tasks']:
-                    for t in p['tasks']:
-                        st.session_state.history.append({
-                            "日期時間": now,
-                            "執行人": p['name'],
-                            "帳號資訊": t['info'],
-                            "轉帳金額": t['amount'],
-                            "執行後餘額": p['bal'] - p['out']
-                        })
-
-            # 呈現結果 (略縮顯示)
-            st.divider()
-            cols = st.columns(len(people_list))
-            for idx, p in enumerate(people_list):
-                with cols[idx]:
-                    final_bal = p['bal'] - p['out']
-                    with st.container(border=True):
-                        st.write(f"### {p['name']}")
-                        msg = f"{p['name']}你好，今日轉帳任務：\n"
-                        for i, task in enumerate(p['tasks'], 1):
-                            msg += f"{i}. {task['info']} 轉 {task['amount']}\n"
-                        msg += f"---\n總計：{p['out']:,}\n剩餘：{final_bal:,}"
-                        st.code(msg, language="text")
-
-# --- 5. 顯示未分配的部分 (重點修正) ---
-        if unassigned:
-            st.divider()
-            st.error(f"⚠️ 額度不足！剩餘 {len(unassigned)} 筆未分配。")
-            
-            # 建立未分配清單的文字
-            un_msg = "❌ 以下帳號因額度不足尚未分配：\n"
-            total_un = 0
-            for i, u in enumerate(unassigned, 1):
-                un_msg += f"{i}. {u['info']} 轉 {u['amount']:,}\n"
-                total_un += u['amount']
-            un_msg += f"---\n待分配總額：{total_un:,}"
-            
-            # 使用 st.code 顯示，方便你複製或對帳
-            st.code(un_msg, language="text")
-            
-            # 也可以額外加一個小提示，告訴你目前還差多少錢
-            st.warning(f"💡 建議：你需要再補大約 {total_un:,} 元的額度，或調低左側的「留底金額」。")
-
           
 
 # --- 第二頁：歷史紀錄 ---
