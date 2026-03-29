@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
-# 1. 網頁基本設定
+# 1. 基本設定
 st.set_page_config(page_title="轉帳助手 Pro", page_icon="💸", layout="wide")
 
 # --- 2. 解析函數 (強化容錯) ---
@@ -25,29 +25,29 @@ def parse_data(trans_text, people_text, buffer_val):
             p_list.append({'name': match.group(1).strip(), 'bal': int(match.group(2)), 'limit': int(match.group(2)) - buffer_val, 'tasks': [], 'out': 0})
     return t_list, p_list
 
-# --- 3. 雲端同步更新函數 (強效比對版) ---
+# --- 3. 雲端同步更新函數 (純數字比對版) ---
 def update_gsheet_status(task_info, task_amt, person_name):
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # ttl=0 強制抓最新，不讀快取
         df = conn.read(worksheet="Sheet1", ttl=0)
         
         if df.empty:
-            st.error("雲端目前沒有資料，請先按『執行分配』")
+            st.warning("雲端無資料。")
             return
 
-        # [核心優化] 統一清洗資料：轉字串、去空格、去逗號、去橫線
-        def clean(val): return str(val).replace('-', '').replace(',', '').replace(' ', '').strip()
+        # 把所有符號都刪掉，只留數字的比對工具
+        def to_pure_num(val):
+            return re.sub(r'\D', '', str(val))
 
         target_name = person_name.strip()
-        target_info = clean(task_info)
-        target_amt = clean(task_amt)
+        target_info = to_pure_num(task_info)
+        target_amt = to_pure_num(task_amt)
 
-        # 建立比對遮罩
+        # 建立比對條件
         mask = (
             (df['執行人'].astype(str).str.strip() == target_name) & 
-            (df['帳號'].apply(clean) == target_info) & 
-            (df['金額'].apply(clean) == target_amt) & 
+            (df['帳號'].apply(to_pure_num) == target_info) & 
+            (df['金額'].apply(to_pure_num) == target_amt) & 
             (df['狀態'].astype(str).str.strip() == "未完成")
         )
         
@@ -55,9 +55,10 @@ def update_gsheet_status(task_info, task_amt, person_name):
             last_index = df[mask].index[-1]
             df.at[last_index, '狀態'] = "完成"
             conn.update(worksheet="Sheet1", data=df)
-            st.toast(f"✅ 同步成功：{person_name} {task_amt:,} 元")
+            st.toast(f"✅ 同步成功：{person_name} 已結清")
         else:
-            st.toast("ℹ️ 雲端找不到符合的『未完成』紀錄，可能已更新過。")
+            st.toast("ℹ️ 找不到匹配的『未完成』紀錄，請確認雲端是否有該筆資料。")
+            
     except Exception as e:
         st.error(f"同步失敗：{e}")
 
@@ -76,7 +77,7 @@ with st.sidebar:
 
 # --- 5. 主要介面 ---
 st.title("💸 轉帳自動化分配工具")
-tab1, tab2 = st.tabs(["🚀 開始分配", "📜 雲端歷史紀錄"])
+tab1, tab2 = st.tabs(["🚀 開始分配", "📜 雲端紀錄"])
 
 with tab1:
     col1, col2 = st.columns(2)
@@ -98,57 +99,50 @@ with tab1:
                 
                 st.session_state.current_results = p_list
                 
-                # --- 初始化雲端寫入 ---
+                # --- 初始化雲端寫入 (強制設為文字格式) ---
                 try:
                     conn = st.connection("gsheets", type=GSheetsConnection)
                     new_records = []
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     for p in p_list:
                         for task in p['tasks']:
-                            new_records.append({"時間": now, "執行人": p['name'], "帳號": task['info'], "金額": int(task['amount']), "狀態": "未完成"})
+                            # 帳號前加一個單引號，強迫 Google 視為文字，保留開頭的 0
+                            new_records.append({"時間": now, "執行人": p['name'], "帳號": f"'{task['info']}", "金額": task['amount'], "狀態": "未完成"})
                     
                     if new_records:
                         new_df = pd.DataFrame(new_records)
                         try:
-                            # 強制重新讀取現有資料
                             existing_df = conn.read(worksheet="Sheet1", ttl=0)
                             if not existing_df.empty and '執行人' in existing_df.columns:
                                 final_df = pd.concat([existing_df, new_df], ignore_index=True)
-                            else:
-                                final_df = new_df
+                            else: final_df = new_df
                         except: final_df = new_df
                         
                         conn.update(worksheet="Sheet1", data=final_df)
-                        st.success("✅ 雲端任務已同步，現在可以開始打勾核對。")
-                except Exception as e: st.error(f"雲端初始化失敗：{e}")
-            else: st.error("輸入格式有誤")
+                        st.success("✅ 雲端同步完成！")
+                except Exception as e: st.error(f"雲端寫入失敗：{e}")
+            else: st.error("格式有誤")
 
     with c2:
-        if st.button("🗑️ 清空今日結果", use_container_width=True):
+        if st.button("🗑️ 清空今日", use_container_width=True):
             st.session_state.current_results = None
             st.rerun()
 
-    # --- 顯示結果與打勾 ---
     if st.session_state.current_results:
         for p in st.session_state.current_results:
             with st.container(border=True):
-                cl, cr = st.columns([1, 2])
-                with cl:
-                    st.success(f"### {p['name']}")
-                    st.write(f"今日總轉出: {p['out']:,}")
-                with cr:
-                    msg = f"{p['name']}今日任務：\n" + "\n".join([f"{i+1}. {t['info']} 轉 {t['amount']:,}" for i, t in enumerate(p['tasks'])])
-                    st.code(msg, language="text")
-                    for i, t in enumerate(p['tasks']):
-                        t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
-                        # 勾選觸發同步
-                        if st.checkbox(f"金額 {t['amount']:,} ({t['info']})", key=t_key):
-                            if f"done_{t_key}" not in st.session_state:
-                                update_gsheet_status(t['info'], t['amount'], p['name'])
-                                st.session_state[f"done_{t_key}"] = True
+                st.success(f"### {p['name']} (今日總計: {p['out']:,})")
+                msg = f"{p['name']}今日任務：\n" + "\n".join([f"{i+1}. {t['info']} 轉 {t['amount']:,}" for i, t in enumerate(p['tasks'])])
+                st.code(msg, language="text")
+                for i, t in enumerate(p['tasks']):
+                    t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
+                    if st.checkbox(f"金額 {t['amount']:,} ({t['info']})", key=t_key):
+                        if f"done_{t_key}" not in st.session_state:
+                            update_gsheet_status(t['info'], t['amount'], p['name'])
+                            st.session_state[f"done_{t_key}"] = True
 
 with tab2:
-    if st.button("🔄 刷新雲端資料"): st.rerun()
+    if st.button("🔄 刷新雲端"): st.rerun()
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Sheet1", ttl=0)
