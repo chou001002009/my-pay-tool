@@ -45,7 +45,7 @@ def parse_data(trans_text, people_text, buffer_v):
     p_list = []
     for line in people_text.split('\n'):
         if not line.strip(): continue
-        match = re.search(r'(\w+)有\s*(\d+)', line)
+        match = re.search(r'(\w+),\s*(\d+)', line)
         if match:
             bal = int(match.group(2))
             p_list.append({'name': match.group(1), 'bal': bal, 'limit': bal - buffer_v, 'tasks': [], 'out': 0})
