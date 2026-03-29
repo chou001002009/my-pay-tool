@@ -31,33 +31,18 @@ with st.sidebar:
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
-        raw_transfers = st.text_area("📋 1. 貼上轉帳清單", height=200)
+        raw_transfers = st.text_area("📋 1. 貼上轉帳清單", height=200, key="input_trans")
     with col2:
-        raw_people = st.text_area("👥 2. 輸入人員餘額", height=200)
+        raw_people = st.text_area("👥 2. 輸入人員餘額", height=200, key="input_people")
 
-    def parse_data(trans_text, people_text):
-        trans_list = []
-        for line in trans_text.split('\n'):
-            if not line.strip(): continue
-            match = re.search(r'([\d-]+)轉(\d+)', line.replace(" ", ""))
-            if match: trans_list.append({'info': match.group(1), 'amount': int(match.group(2))})
-        
-        people_list = []
-        for line in people_text.split('\n'):
-            if not line.strip(): continue
-            match = re.search(r'(\w+),\s*(\d+)', line)
-            if match:
-                bal = int(match.group(2))
-                people_list.append({'name': match.group(1), 'bal': bal, 'limit': bal - buffer_amt, 'tasks': [], 'out': 0})
-        return trans_list, people_list
-
+    # 點擊按鈕後，將結果存入 session_state
     if st.button("🚀 執行智慧分配", use_container_width=True):
         trans_list, people_list = parse_data(raw_transfers, raw_people)
         
         if trans_list and people_list:
+            # 這裡執行你原本的分配邏輯 (大額優先...)
             trans_list.sort(key=lambda x: x['amount'], reverse=True)
             unassigned = []
-            
             for t in trans_list:
                 people_list.sort(key=lambda x: x['limit'], reverse=True)
                 if people_list[0]['limit'] >= t['amount']:
@@ -66,6 +51,62 @@ with tab1:
                     people_list[0]['out'] += t['amount']
                 else:
                     unassigned.append(t)
+            
+            # --- 重要：將結果存起來，這樣勾選時才不會消失 ---
+            st.session_state.current_results = people_list
+            st.session_state.unassigned_results = unassigned
+            # 清空舊的勾選紀錄
+            st.session_state.done_tasks = {} 
+        else:
+            st.warning("請輸入內容。")
+
+    # --- 顯示結果與打勾區塊 ---
+    if 'current_results' in st.session_state:
+        people_results = st.session_state.current_results
+        unassigned_results = st.session_state.unassigned_results
+
+        st.divider()
+        st.subheader("🏁 執行進度追蹤")
+        
+        # 建立三行顯示每個人
+        res_cols = st.columns(len(people_results))
+        total_tasks_count = 0
+        finished_tasks_count = 0
+
+        for idx, p in enumerate(people_results):
+            with res_cols[idx]:
+                final_bal = p['bal'] - p['out']
+                st.success(f"### {p['name']}")
+                
+                # 1. 複製訊息區
+                msg = f"{p['name']}你好，今日轉帳任務：\n"
+                for i, task in enumerate(p['tasks'], 1):
+                    msg += f"{i}. {task['info']} 轉 {task['amount']:,}\n"
+                msg += f"---\n總計：{p['out']:,}\n剩餘：{final_bal:,}"
+                st.code(msg, language="text")
+
+                # 2. 手動打勾確認區
+                st.write("**核對清單：**")
+                for i, task in enumerate(p['tasks']):
+                    total_tasks_count += 1
+                    # 建立唯一的 Key 用來紀錄打勾狀態
+                    t_key = f"check_{p['name']}_{task['info']}_{task['amount']}"
+                    if st.checkbox(f"{task['amount']:,} ({task['info'][-4:]})", key=t_key):
+                        finished_tasks_count += 1
+        
+        # 3. 總進度條
+        if total_tasks_count > 0:
+            progress_val = finished_tasks_count / total_tasks_count
+            st.write(f"📊 **今日總進度：{finished_tasks_count} / {total_tasks_count} 筆已完成**")
+            st.progress(progress_val)
+            if progress_val == 1.0:
+                st.balloons()
+                st.success("🎉 太棒了！今日轉帳任務已全數結清！")
+
+        # 4. 未分配顯示
+        if unassigned_results:
+            st.divider()
+            st.error(f"⚠️ 還有 {len(unassigned_results)} 筆未分配，請檢查額度。")
 
             # 記錄到歷史清單
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
