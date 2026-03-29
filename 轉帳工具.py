@@ -21,11 +21,11 @@ with st.sidebar:
     st.divider()
     st.subheader("👥 常用人員範本")
     # 你可以在這裡修改預設的人員名字
-    default_people = ["孟", "盛", "廷", "妮"]
+    default_people = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運"]
     
     if st.button("📝 一鍵填入常用人員"):
         # 格式化成：名字 有 0
-        template = "\n".join([f"{name} 有 0" for name in default_people])
+        template = "\n".join([f"{name} , 0" for name in default_people])
         st.session_state["input_p"] = template
         st.rerun()
 
