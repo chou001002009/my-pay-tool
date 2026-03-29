@@ -2,7 +2,7 @@ import streamlit as st
 import re
 
 # 頁面基本設定
-st.set_page_config(page_title="轉帳分配助手", layout="wide")
+st.set_page_config(page_title="轉帳分配助手",page_icon="💰", layout="wide")
 st.title("💰 轉帳自動化分配")
 
 # --- 側邊欄：設定預留金額 ---
