@@ -94,8 +94,8 @@ with tab1:
                         msg += f"---\n總計：{p['out']:,}\n剩餘：{final_bal:,}"
                         st.code(msg, language="text")
 
-            # --- 5. 顯示未分配的部分 (重點修正) ---
-            if unassigned:
+# --- 5. 顯示未分配的部分 (重點修正) ---
+        if unassigned:
             st.divider()
             st.error(f"⚠️ 額度不足！剩餘 {len(unassigned)} 筆未分配。")
             
@@ -112,8 +112,8 @@ with tab1:
             
             # 也可以額外加一個小提示，告訴你目前還差多少錢
             st.warning(f"💡 建議：你需要再補大約 {total_un:,} 元的額度，或調低左側的「留底金額」。")
-            else:
-               st.warning("請輸入內容。")
+
+          
 
 # --- 第二頁：歷史紀錄 ---
 with tab2:
