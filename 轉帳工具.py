@@ -25,23 +25,28 @@ def parse_data(trans_text, people_text, buffer_val):
             p_list.append({'name': match.group(1).strip(), 'bal': int(match.group(2)), 'limit': int(match.group(2)) - buffer_val, 'tasks': [], 'out': 0})
     return t_list, p_list
 
-# --- 3. 雲端同步更新函數 ---
+# --- 3. 雲端同步更新函數 (加強版) ---
 def update_gsheet_status(task_info, task_amt, person_name):
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Sheet1")
         
-        # 尋找對應的資料行 (根據 時間、執行人、帳號、金額 來精準匹配)
-        # 我們找最後一次出現的那一筆 (避免重複帳號誤判)
-        mask = (df['執行人'] == person_name) & (df['帳號'] == task_info) & (df['金額'] == task_amt) & (df['狀態'] == "未完成")
+        # 檢查是否有正確欄位，若無則報錯引導
+        required_cols = ['時間', '執行人', '帳號', '金額', '狀態']
+        if not all(col in df.columns for col in required_cols):
+            st.error("❌ 雲端表單欄位不正確。請確保第一行是：時間, 執行人, 帳號, 金額, 狀態")
+            return
+
+        # 尋找「未完成」且符合條件的最新一筆
+        mask = (df['執行人'] == person_name) & (df['帳號'] == task_info) & (df['金額'].astype(str) == str(task_amt)) & (df['狀態'] == "未完成")
         
         if mask.any():
-            last_index = df[mask].index[-1] # 取得符合條件的最後一行索引
+            last_index = df[mask].index[-1]
             df.at[last_index, '狀態'] = "完成"
             conn.update(worksheet="Sheet1", data=df)
-            st.toast(f"✅ {person_name} 的 {task_amt} 元已同步為『完成』")
+            st.toast(f"✅ {person_name} 的 {task_amt} 元已結清")
         else:
-            st.toast("⚠️ 找不到對應的雲端紀錄")
+            st.toast("ℹ️ 該筆已結清或找不到紀錄")
     except Exception as e:
         st.error(f"同步狀態失敗：{e}")
 
@@ -82,7 +87,7 @@ with tab1:
                 
                 st.session_state.current_results = p_list
                 
-                # --- 初始寫入雲端 (狀態設為 未完成) ---
+                # --- 初始化雲端寫入 ---
                 try:
                     conn = st.connection("gsheets", type=GSheetsConnection)
                     new_records = []
@@ -95,10 +100,15 @@ with tab1:
                         new_df = pd.DataFrame(new_records)
                         try:
                             existing_df = conn.read(worksheet="Sheet1")
-                            final_df = pd.concat([existing_df, new_df], ignore_index=True)
+                            # 如果舊表欄位不符，直接捨棄舊標題用新的
+                            if not all(col in existing_df.columns for col in ['時間', '執行人']):
+                                final_df = new_df
+                            else:
+                                final_df = pd.concat([existing_df, new_df], ignore_index=True)
                         except: final_df = new_df
+                        
                         conn.update(worksheet="Sheet1", data=final_df)
-                        st.toast("✅ 已建立雲端任務清單")
+                        st.toast("✅ 雲端任務已建立")
                 except Exception as e: st.error(f"雲端初始化失敗：{e}")
             else: st.error("格式錯誤")
 
@@ -107,22 +117,21 @@ with tab1:
             st.session_state.current_results = None
             st.rerun()
 
-    # --- 顯示結果與核對打勾 ---
+    # --- 顯示結果與打勾 ---
     if st.session_state.current_results:
         for p in st.session_state.current_results:
             with st.container(border=True):
                 cl, cr = st.columns([1, 2])
                 with cl:
                     st.success(f"### {p['name']}")
-                    st.write(f"總轉出: {p['out']:,}")
+                    st.write(f"今日總轉出: {p['out']:,}")
                 with cr:
                     msg = f"{p['name']}今日任務：\n" + "\n".join([f"{i+1}. {t['info']} 轉 {t['amount']:,}" for i, t in enumerate(p['tasks'])])
                     st.code(msg, language="text")
-                    # 打勾功能：點擊後觸發雲端同步
                     for i, t in enumerate(p['tasks']):
                         t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
+                        # 只有當 checkbox 被點擊時才觸發同步
                         if st.checkbox(f"金額 {t['amount']:,} ({t['info']})", key=t_key):
-                            # 如果被勾選，檢查是否已經同步過，避免重複寫入
                             if f"done_{t_key}" not in st.session_state:
                                 update_gsheet_status(t['info'], t['amount'], p['name'])
                                 st.session_state[f"done_{t_key}"] = True
@@ -131,6 +140,8 @@ with tab2:
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Sheet1")
-        # 按照時間排序，最新的在上面
-        st.dataframe(df.iloc[::-1], use_container_width=True)
+        if not df.empty:
+            st.dataframe(df.iloc[::-1], use_container_width=True) # 最新在最上面
+        else:
+            st.info("雲端目前是空的")
     except: st.info("尚無雲端資料。")
