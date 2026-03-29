@@ -131,3 +131,17 @@ with tab2:
     # 暫時用目前的 Local 紀錄墊一下
     if st.session_state.history:
         st.table(pd.DataFrame(st.session_state.history))
+
+# 在智慧分配按鈕邏輯的最下面加入：
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    # 讀取現有資料
+    existing_data = conn.read(worksheet="Sheet1")
+    # 結合新舊資料
+    new_df = pd.DataFrame(st.session_state.history)
+    updated_df = pd.concat([existing_data, new_df], ignore_index=True)
+    # 寫回雲端
+    conn.update(worksheet="Sheet1", data=updated_df)
+    st.toast("✅ 帳務已同步至 Google Sheets！")
+except Exception as e:
+    st.error(f"雲端同步失敗：{e}")
