@@ -25,28 +25,42 @@ def parse_data(trans_text, people_text, buffer_val):
             p_list.append({'name': match.group(1).strip(), 'bal': int(match.group(2)), 'limit': int(match.group(2)) - buffer_val, 'tasks': [], 'out': 0})
     return t_list, p_list
 
-# --- 3. 雲端同步更新函數 (加強版) ---
+# --- 3. 雲端同步更新函數 (加強比對與強制刷新) ---
 def update_gsheet_status(task_info, task_amt, person_name):
     try:
+        # 建立連線
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Sheet1")
         
-        # 檢查是否有正確欄位，若無則報錯引導
-        required_cols = ['時間', '執行人', '帳號', '金額', '狀態']
-        if not all(col in df.columns for col in required_cols):
-            st.error("❌ 雲端表單欄位不正確。請確保第一行是：時間, 執行人, 帳號, 金額, 狀態")
-            return
+        # [重點修正] 使用 ttl=0 強制不使用快取，確保讀到最新狀態
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        
+        # 確保資料格式統一，避免空格或字串/數字比對出錯
+        df['金額'] = df['金額'].astype(str).str.replace(',', '').str.strip()
+        df['執行人'] = df['執行人'].astype(str).str.strip()
+        df['帳號'] = df['帳號'].astype(str).str.strip()
+        df['狀態'] = df['狀態'].astype(str).str.strip()
 
-        # 尋找「未完成」且符合條件的最新一筆
-        mask = (df['執行人'] == person_name) & (df['帳號'] == task_info) & (df['金額'].astype(str) == str(task_amt)) & (df['狀態'] == "未完成")
+        # 比對條件：執行人、帳號、金額 都要對上，且目前是「未完成」
+        target_amt = str(task_amt).strip()
+        mask = (
+            (df['執行人'] == person_name.strip()) & 
+            (df['帳號'] == task_info.strip()) & 
+            (df['金額'] == target_amt) & 
+            (df['狀態'] == "未完成")
+        )
         
         if mask.any():
+            # 找到最後一筆符合的資料（通常是最新的任務）
             last_index = df[mask].index[-1]
             df.at[last_index, '狀態'] = "完成"
+            
+            # 寫回雲端
             conn.update(worksheet="Sheet1", data=df)
-            st.toast(f"✅ {person_name} 的 {task_amt} 元已結清")
+            st.toast(f"✅ 雲端同步：{person_name} 的 {task_amt:,} 元已改為『完成』")
         else:
-            st.toast("ℹ️ 該筆已結清或找不到紀錄")
+            # 診斷用提示
+            st.toast("ℹ️ 雲端找不到未完成的對應紀錄，可能已更新。")
+            
     except Exception as e:
         st.error(f"同步狀態失敗：{e}")
 
