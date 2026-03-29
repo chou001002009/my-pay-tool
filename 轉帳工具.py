@@ -7,7 +7,7 @@ from streamlit_gsheets import GSheetsConnection
 # 1. 網頁基本設定
 st.set_page_config(page_title="轉帳助手 Pro", page_icon="💸", layout="wide")
 
-# --- 2. 解析函數 ---
+# --- 2. 解析函數 (強化容錯) ---
 def parse_data(trans_text, people_text, buffer_val):
     t_list = []
     for line in trans_text.split('\n'):
@@ -25,44 +25,41 @@ def parse_data(trans_text, people_text, buffer_val):
             p_list.append({'name': match.group(1).strip(), 'bal': int(match.group(2)), 'limit': int(match.group(2)) - buffer_val, 'tasks': [], 'out': 0})
     return t_list, p_list
 
-# --- 3. 雲端同步更新函數 (加強比對與強制刷新) ---
+# --- 3. 雲端同步更新函數 (強效比對版) ---
 def update_gsheet_status(task_info, task_amt, person_name):
     try:
-        # 建立連線
         conn = st.connection("gsheets", type=GSheetsConnection)
-        
-        # [重點修正] 使用 ttl=0 強制不使用快取，確保讀到最新狀態
+        # ttl=0 強制抓最新，不讀快取
         df = conn.read(worksheet="Sheet1", ttl=0)
         
-        # 確保資料格式統一，避免空格或字串/數字比對出錯
-        df['金額'] = df['金額'].astype(str).str.replace(',', '').str.strip()
-        df['執行人'] = df['執行人'].astype(str).str.strip()
-        df['帳號'] = df['帳號'].astype(str).str.strip()
-        df['狀態'] = df['狀態'].astype(str).str.strip()
+        if df.empty:
+            st.error("雲端目前沒有資料，請先按『執行分配』")
+            return
 
-        # 比對條件：執行人、帳號、金額 都要對上，且目前是「未完成」
-        target_amt = str(task_amt).strip()
+        # [核心優化] 統一清洗資料：轉字串、去空格、去逗號、去橫線
+        def clean(val): return str(val).replace('-', '').replace(',', '').replace(' ', '').strip()
+
+        target_name = person_name.strip()
+        target_info = clean(task_info)
+        target_amt = clean(task_amt)
+
+        # 建立比對遮罩
         mask = (
-            (df['執行人'] == person_name.strip()) & 
-            (df['帳號'] == task_info.strip()) & 
-            (df['金額'] == target_amt) & 
-            (df['狀態'] == "未完成")
+            (df['執行人'].astype(str).str.strip() == target_name) & 
+            (df['帳號'].apply(clean) == target_info) & 
+            (df['金額'].apply(clean) == target_amt) & 
+            (df['狀態'].astype(str).str.strip() == "未完成")
         )
         
         if mask.any():
-            # 找到最後一筆符合的資料（通常是最新的任務）
             last_index = df[mask].index[-1]
             df.at[last_index, '狀態'] = "完成"
-            
-            # 寫回雲端
             conn.update(worksheet="Sheet1", data=df)
-            st.toast(f"✅ 雲端同步：{person_name} 的 {task_amt:,} 元已改為『完成』")
+            st.toast(f"✅ 同步成功：{person_name} {task_amt:,} 元")
         else:
-            # 診斷用提示
-            st.toast("ℹ️ 雲端找不到未完成的對應紀錄，可能已更新。")
-            
+            st.toast("ℹ️ 雲端找不到符合的『未完成』紀錄，可能已更新過。")
     except Exception as e:
-        st.error(f"同步狀態失敗：{e}")
+        st.error(f"同步失敗：{e}")
 
 # 初始化
 if 'current_results' not in st.session_state: st.session_state.current_results = None
@@ -73,7 +70,7 @@ with st.sidebar:
     buffer_val = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
     all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運"]
     selected = st.multiselect("參與人員：", options=all_names, default=all_names)
-    if st.button("📝 生成名單"):
+    if st.button("📝 生成名單範本"):
         st.session_state["input_p"] = "\n".join([f"{n} , 0" for n in selected])
         st.rerun()
 
@@ -108,26 +105,26 @@ with tab1:
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     for p in p_list:
                         for task in p['tasks']:
-                            new_records.append({"時間": now, "執行人": p['name'], "帳號": task['info'], "金額": task['amount'], "狀態": "未完成"})
+                            new_records.append({"時間": now, "執行人": p['name'], "帳號": task['info'], "金額": int(task['amount']), "狀態": "未完成"})
                     
                     if new_records:
                         new_df = pd.DataFrame(new_records)
                         try:
-                            existing_df = conn.read(worksheet="Sheet1")
-                            # 如果舊表欄位不符，直接捨棄舊標題用新的
-                            if not all(col in existing_df.columns for col in ['時間', '執行人']):
-                                final_df = new_df
-                            else:
+                            # 強制重新讀取現有資料
+                            existing_df = conn.read(worksheet="Sheet1", ttl=0)
+                            if not existing_df.empty and '執行人' in existing_df.columns:
                                 final_df = pd.concat([existing_df, new_df], ignore_index=True)
+                            else:
+                                final_df = new_df
                         except: final_df = new_df
                         
                         conn.update(worksheet="Sheet1", data=final_df)
-                        st.toast("✅ 雲端任務已建立")
+                        st.success("✅ 雲端任務已同步，現在可以開始打勾核對。")
                 except Exception as e: st.error(f"雲端初始化失敗：{e}")
-            else: st.error("格式錯誤")
+            else: st.error("輸入格式有誤")
 
     with c2:
-        if st.button("🗑️ 清空今日", use_container_width=True):
+        if st.button("🗑️ 清空今日結果", use_container_width=True):
             st.session_state.current_results = None
             st.rerun()
 
@@ -144,18 +141,16 @@ with tab1:
                     st.code(msg, language="text")
                     for i, t in enumerate(p['tasks']):
                         t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
-                        # 只有當 checkbox 被點擊時才觸發同步
+                        # 勾選觸發同步
                         if st.checkbox(f"金額 {t['amount']:,} ({t['info']})", key=t_key):
                             if f"done_{t_key}" not in st.session_state:
                                 update_gsheet_status(t['info'], t['amount'], p['name'])
                                 st.session_state[f"done_{t_key}"] = True
 
 with tab2:
+    if st.button("🔄 刷新雲端資料"): st.rerun()
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Sheet1")
-        if not df.empty:
-            st.dataframe(df.iloc[::-1], use_container_width=True) # 最新在最上面
-        else:
-            st.info("雲端目前是空的")
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        st.dataframe(df.iloc[::-1], use_container_width=True)
     except: st.info("尚無雲端資料。")
