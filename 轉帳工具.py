@@ -142,3 +142,18 @@ with tab1:
     if st.session_state.current_results:
         st.divider()
         for p in st.session_state.current_results:
+            with st.container(border=True):
+                st.success(f"### {p['name']} (總計: {p['out']:,})")
+                msg = f"{p['name']}任務：\n" + "\n".join([f"{i+1}. {t['info']} 轉 {t['amount']:,}" for i, t in enumerate(p['tasks'])])
+                st.code(msg, language="text")
+                for i, t in enumerate(p['tasks']):
+                    # 單純打勾，不觸發任何事
+                    st.checkbox(f"金額 {t['amount']:,} ({t['info']})", key=f"chk_{p['name']}_{t['info']}_{t['amount']}")
+
+with tab2:
+    if st.button("🔄 刷新顯示"): st.rerun()
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        st.dataframe(df.iloc[::-1], use_container_width=True)
+    except: st.info("尚無資料。")
