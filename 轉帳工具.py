@@ -13,21 +13,57 @@ if 'history' not in st.session_state:
 if 'current_results' not in st.session_state:
     st.session_state.current_results = None
 
-# --- 3. 側邊欄：常用人員設定 ---
+# --- 2. 定義解析函數 (優化版：支援「有」或「逗號」) ---
+def parse_data(trans_text, people_text, buffer_val):
+    t_list = []
+    for line in trans_text.split('\n'):
+        if not line.strip(): continue
+        match = re.search(r'([\d-]+)轉(\d+)', line.replace(" ", ""))
+        if match:
+            t_list.append({'info': match.group(1), 'amount': int(match.group(2))})
+    
+    p_list = []
+    for line in people_text.split('\n'):
+        if not line.strip(): continue
+        # 優化後的正則表達式：支援「大孟 有 100」或「大孟 , 100」
+        match = re.search(r'(\w+)\s*(?:有|,)\s*(\d+)', line.replace(" ", ""))
+        if match:
+            bal = int(match.group(2))
+            p_list.append({
+                'name': match.group(1), 
+                'bal': bal, 
+                'limit': bal - buffer_val, 
+                'tasks': [], 
+                'out': 0
+            })
+    return t_list, p_list
+
+# --- 3. 側邊欄：常用人員勾選設定 ---
 with st.sidebar:
     st.header("⚙️ 系統設定")
     buffer_val = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
     
     st.divider()
-    st.subheader("👥 常用人員範本")
-    # 你可以在這裡修改預設的人員名字
-    default_people = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運"]
+    st.subheader("👥 常用人員選擇")
     
-    if st.button("📝 一鍵填入常用人員"):
-        # 格式化成：名字 有 0
-        template = "\n".join([f"{name} , 0" for name in default_people])
-        st.session_state["input_p"] = template
-        st.rerun()
+    # 這裡定義完整名單
+    all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運"]
+    
+    # 使用多選框，預設全選 (也可以改成預設不選)
+    selected_names = st.multiselect(
+        "選擇本次參與人員：",
+        options=all_names,
+        default=all_names
+    )
+    
+    if st.button("📝 生成所選人員清單"):
+        # 根據勾選的人名生成範本，使用你要求的逗號格式
+        if selected_names:
+            template = "\n".join([f"{name} , 0" for name in selected_names])
+            st.session_state["input_p"] = template
+            st.rerun()
+        else:
+            st.warning("請至少選擇一個人喔！")
 
     st.divider()
     if st.button("🚨 清空所有歷史紀錄"):
