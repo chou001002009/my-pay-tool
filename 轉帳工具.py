@@ -1,97 +1,121 @@
 import streamlit as st
 import re
+import pandas as pd
+from datetime import datetime
 
-# 頁面基本設定
-st.set_page_config(page_title="轉帳分配助手",page_icon="💰", layout="wide")
-st.title("💰 轉帳自動化分配")
+# 1. 設定 App 圖示與標題 (換成錢包 Emoji 💸)
+st.set_page_config(
+    page_title="轉帳分配助手", 
+    page_icon="💸", 
+    layout="wide"
+)
 
-# --- 側邊欄：設定預留金額 ---
+st.title("💰 轉帳自動化分配工具")
+
+# 初始化歷史紀錄 (存放在 Session 內)
+if 'history' not in st.session_state:
+    st.session_state.history = []
+
+# 使用分頁：將功能分開
+tab1, tab2 = st.tabs(["🚀 開始分配", "📜 歷史紀錄"])
+
+# --- 側邊欄：設定 ---
 with st.sidebar:
     st.header("⚙️ 參數設定")
-    buffer_amt = st.slider("每人留底金額 (5000-8000)", 5000, 10000, 6500, step=500)
-    st.info(f"系統會確保每人轉完後剩下約 {buffer_amt:,} 元。")
+    buffer_amt = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
+    if st.button("🗑️ 清空所有歷史紀錄"):
+        st.session_state.history = []
+        st.rerun()
 
-# --- 1. 輸入區 ---
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("📋 1. 貼上轉帳清單")
-    raw_transfers = st.text_area("格式：帳號-銀行碼 轉 金額", height=200, placeholder="118540...-822 轉 19260")
-with col2:
-    st.subheader("👥 2. 輸入人員餘額")
-    raw_people = st.text_area("格式：人名有金額", height=200, placeholder="盛, 62215")
+# --- 第一頁：分配功能 ---
+with tab1:
+    col1, col2 = st.columns(2)
+    with col1:
+        raw_transfers = st.text_area("📋 1. 貼上轉帳清單", height=200)
+    with col2:
+        raw_people = st.text_area("👥 2. 輸入人員餘額", height=200)
 
-# --- 2. 核心邏輯 ---
-def parse_data(trans_text, people_text):
-    trans_list = []
-    for line in trans_text.split('\n'):
-        if not line.strip(): continue
-        match = re.search(r'([\d-]+)轉(\d+)', line.replace(" ", ""))
-        if match: trans_list.append({'info': match.group(1), 'amount': int(match.group(2))})
-    
-    people_list = []
-    for line in people_text.split('\n'):
-        if not line.strip(): continue
-        match = re.search(r'(\w+),\s*(\d+)', line)
-        if match:
-            bal = int(match.group(2))
-            people_list.append({'name': match.group(1), 'bal': bal, 'limit': bal - buffer_amt, 'tasks': [], 'out': 0})
-    return trans_list, people_list
-
-# --- 3. 運算與輸出 ---
-if st.button("🚀 開始智慧分配", use_container_width=True):
-    trans_list, people_list = parse_data(raw_transfers, raw_people)
-    
-    if trans_list and people_list:
-        # 大額優先分配
-        trans_list.sort(key=lambda x: x['amount'], reverse=True)
+    def parse_data(trans_text, people_text):
+        trans_list = []
+        for line in trans_text.split('\n'):
+            if not line.strip(): continue
+            match = re.search(r'([\d-]+)轉(\d+)', line.replace(" ", ""))
+            if match: trans_list.append({'info': match.group(1), 'amount': int(match.group(2))})
         
-        unassigned = [] # 用來存放分配不下的筆數
+        people_list = []
+        for line in people_text.split('\n'):
+            if not line.strip(): continue
+            match = re.search(r'(\w+)有\s*(\d+)', line)
+            if match:
+                bal = int(match.group(2))
+                people_list.append({'name': match.group(1), 'bal': bal, 'limit': bal - buffer_amt, 'tasks': [], 'out': 0})
+        return trans_list, people_list
+
+    if st.button("🚀 執行智慧分配", use_container_width=True):
+        trans_list, people_list = parse_data(raw_transfers, raw_people)
         
-        for t in trans_list:
-            # 每次分配前，重新排序，找「目前剩餘額度最高」的人
-            people_list.sort(key=lambda x: x['limit'], reverse=True)
+        if trans_list and people_list:
+            trans_list.sort(key=lambda x: x['amount'], reverse=True)
+            unassigned = []
             
-            # 如果剩餘額度最高的人也接不下這筆，就代表這筆暫時分不掉
-            if people_list[0]['limit'] >= t['amount']:
-                people_list[0]['tasks'].append(t)
-                people_list[0]['limit'] -= t['amount']
-                people_list[0]['out'] += t['amount']
-            else:
-                unassigned.append(t)
+            for t in trans_list:
+                people_list.sort(key=lambda x: x['limit'], reverse=True)
+                if people_list[0]['limit'] >= t['amount']:
+                    people_list[0]['tasks'].append(t)
+                    people_list[0]['limit'] -= t['amount']
+                    people_list[0]['out'] += t['amount']
+                else:
+                    unassigned.append(t)
 
-        # --- 4. 畫面呈現 ---
-        st.divider()
-        
-        # 顯示已成功分配的部分
-        st.subheader("✅ 已分配任務")
-        cols = st.columns(len(people_list))
-        for idx, p in enumerate(people_list):
-            with cols[idx]:
-                final_bal = p['bal'] - p['out']
-                with st.container(border=True):
-                    st.write(f"### {p['name']}")
-                    st.write(f"預計剩餘: `{final_bal:,}`")
-                    
-                    msg = f"{p['name']}你好，今日轉帳任務：\n"
-                    for i, task in enumerate(p['tasks'], 1):
-                        msg += f"{i}. {task['info']} 轉 {task['amount']}\n"
-                    msg += f"---\n總計：{p['out']:,}\n剩餘：{final_bal:,}"
-                    
-                    st.code(msg, language="text")
+            # 記錄到歷史清單
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for p in people_list:
+                if p['tasks']:
+                    for t in p['tasks']:
+                        st.session_state.history.append({
+                            "日期時間": now,
+                            "執行人": p['name'],
+                            "帳號資訊": t['info'],
+                            "轉帳金額": t['amount'],
+                            "執行後餘額": p['bal'] - p['out']
+                        })
 
-        # --- 5. 顯示未分配的部分 (重點修正) ---
-        if unassigned:
+            # 呈現結果 (略縮顯示)
             st.divider()
-            st.error("⚠️ 注意：以下筆數因額度不足『尚未分配』！")
-            
-            # 用表格呈現漏掉的筆數，方便你手動加總或檢查
-            unassigned_data = []
-            total_unassigned = 0
-            for u in unassigned:
-                unassigned_data.append({"帳號資訊": u['info'], "金額": f"{u['amount']:,}"})
-                total_unassigned += u['amount']
-            
-            st.table(unassigned_data)
-            st.warning(f"尚未分配的總金額合計為：{total_unassigned:,} 元")
+            cols = st.columns(len(people_list))
+            for idx, p in enumerate(people_list):
+                with cols[idx]:
+                    final_bal = p['bal'] - p['out']
+                    with st.container(border=True):
+                        st.write(f"### {p['name']}")
+                        msg = f"{p['name']}你好，今日轉帳任務：\n"
+                        for i, task in enumerate(p['tasks'], 1):
+                            msg += f"{i}. {task['info']} 轉 {task['amount']}\n"
+                        msg += f"---\n總計：{p['out']:,}\n剩餘：{final_bal:,}"
+                        st.code(msg, language="text")
+
+            if unassigned:
+                st.error(f"⚠️ 額度不足！剩餘 {len(unassigned)} 筆未分配。")
+        else:
+            st.warning("請輸入內容。")
+
+# --- 第二頁：歷史紀錄 ---
+with tab2:
+    st.subheader("📝 歷史分配紀錄")
+    if st.session_state.history:
+        df = pd.DataFrame(st.session_state.history)
+        
+        # 顯示表格
+        st.dataframe(df, use_container_width=True)
+        
+        # 讓使用者可以下載成 CSV 存檔 (最保險)
+        csv = df.to_csv(index=False).encode('utf-8-sig') # utf-8-sig 解決 Excel 中文亂碼
+        st.download_button(
+            label="📥 下載完整歷史紀錄 (CSV)",
+            data=csv,
+            file_name=f"轉帳紀錄_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime='text/csv',
+            use_container_width=True
+        )
     else:
-        st.warning("請確保輸入格式正確後再點擊分配。")
+        st.info("目前還沒有任何分配紀錄。")
