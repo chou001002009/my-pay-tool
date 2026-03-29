@@ -7,7 +7,7 @@ from streamlit_gsheets import GSheetsConnection
 # 1. 基本設定
 st.set_page_config(page_title="轉帳助手 Pro", page_icon="💸", layout="wide")
 
-# --- 2. 解析函數 ---
+# --- 2. 解析函數 (強化容錯) ---
 def parse_data(trans_text, people_text, buffer_val):
     t_list = []
     for line in trans_text.split('\n'):
@@ -25,50 +25,61 @@ def parse_data(trans_text, people_text, buffer_val):
             p_list.append({'name': match.group(1).strip(), 'bal': int(match.group(2)), 'limit': int(match.group(2)) - buffer_val, 'tasks': [], 'out': 0})
     return t_list, p_list
 
-# --- 3. 核心功能：批次更新狀態至雲端 ---
+# --- 3. 核心功能：暴力比對並同步 ---
 def sync_all_checked_to_cloud():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
+        # 強制刷新的關鍵：ttl=0
         df = conn.read(worksheet="Sheet1", ttl=0)
         
         if df.empty:
-            st.warning("雲端無資料可更新。")
+            st.warning("雲端目前的表單是空的，請先按左邊的『執行分配』上傳任務。")
             return
 
-        def to_pure_num(val): return re.sub(r'\D', '', str(val))
-        
-        updated_count = 0
-        # 掃描當前所有分配的人員與任務
-        for p in st.session_state.current_results:
-            for i, t in enumerate(p['tasks']):
-                t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
-                # 如果這個 Checkbox 在介面上是被勾選的
-                if st.session_state.get(t_key, False):
-                    target_name = p['name'].strip()
-                    target_info = to_pure_num(t['info'])
-                    target_amt = to_pure_num(t['amount'])
+        # 定義「純化」函數：只留文字和數字，去掉所有符號
+        def clean_val(v): return re.sub(r'[^a-zA-Z0-9\u4e00-\u9fa5]', '', str(v)).strip()
+        def only_num(v): return re.sub(r'\D', '', str(v))
 
-                    # 尋找雲端中尚未完成的對應紀錄
+        updated_count = 0
+        df_updated = df.copy()
+
+        # 掃描目前的勾選狀態
+        for p in st.session_state.current_results:
+            for t in p['tasks']:
+                t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
+                
+                # 如果手機上這格是勾選的
+                if st.session_state.get(t_key, False):
+                    t_name = clean_val(p['name'])
+                    t_info = only_num(t['info'])
+                    t_amt = only_num(t['amount'])
+
+                    # 在雲端 DF 裡找匹配行
                     mask = (
-                        (df['執行人'].astype(str).str.strip() == target_name) & 
-                        (df['帳號'].apply(to_pure_num) == target_info) & 
-                        (df['金額'].apply(to_pure_num) == target_amt) & 
-                        (df['狀態'].astype(str).str.strip() == "未完成")
+                        (df_updated['執行人'].apply(clean_val) == t_name) & 
+                        (df_updated['帳號'].apply(only_num) == t_info) & 
+                        (df_updated['金額'].apply(only_num) == t_amt) & 
+                        (df_updated['狀態'].str.strip() == "未完成")
                     )
                     
                     if mask.any():
-                        last_index = df[mask].index[-1]
-                        df.at[last_index, '狀態'] = "完成"
+                        target_idx = df_updated[mask].index[-1]
+                        df_updated.at[target_idx, '狀態'] = "完成"
                         updated_count += 1
         
         if updated_count > 0:
-            conn.update(worksheet="Sheet1", data=df)
-            st.success(f"🎊 成功同步 {updated_count} 筆資料至雲端！")
+            conn.update(worksheet="Sheet1", data=df_updated)
+            st.success(f"🎯 成功！已將 {updated_count} 筆任務更新為『完成』！")
+            # 成功後自動刷新畫面
+            st.rerun()
         else:
-            st.info("沒有偵測到新勾選的未完成項目。")
+            st.info("⚠️ 沒有偵測到『新勾選』且『雲端狀態為未完成』的項目。")
+            with st.expander("🔍 點我看為什麼對不準 (偵錯資訊)"):
+                st.write("手機抓到的最後一筆：", p['name'], t['info'], t['amount'])
+                st.write("雲端目前的內容：", df[['執行人', '帳號', '金額', '狀態']].head())
             
     except Exception as e:
-        st.error(f"同步失敗：{e}")
+        st.error(f"同步過程發生錯誤：{e}")
 
 # --- 4. 初始化 ---
 if 'current_results' not in st.session_state: st.session_state.current_results = None
@@ -92,7 +103,7 @@ with tab1:
     with col1: raw_trans = st.text_area("📋 1. 貼上轉帳清單", height=150, key="input_t")
     with col2: raw_ppl = st.text_area("👥 2. 輸入人員餘額", height=150, key="input_p")
 
-    # 分配按鈕區
+    # 功能按鈕
     c1, c2, c3 = st.columns([2, 2, 1])
     with c1:
         if st.button("🚀 執行分配並同步雲端", use_container_width=True):
@@ -106,7 +117,7 @@ with tab1:
                         p_list[0]['limit'] -= t['amount']
                         p_list[0]['out'] += t['amount']
                 st.session_state.current_results = p_list
-                # 初始同步寫入
+                # 寫入雲端
                 try:
                     conn = st.connection("gsheets", type=GSheetsConnection)
                     new_records = []
@@ -117,38 +128,36 @@ with tab1:
                     if new_records:
                         new_df = pd.DataFrame(new_records)
                         try:
-                            existing_df = conn.read(worksheet="Sheet1", ttl=0)
-                            final_df = pd.concat([existing_df, new_df], ignore_index=True) if not existing_df.empty else new_df
+                            ex_df = conn.read(worksheet="Sheet1", ttl=0)
+                            final_df = pd.concat([ex_df, new_df], ignore_index=True) if not ex_df.empty else new_df
                         except: final_df = new_df
                         conn.update(worksheet="Sheet1", data=final_df)
-                        st.success("✅ 雲端任務已同步！")
-                except Exception as e: st.error(f"寫入失敗：{e}")
-            else: st.error("格式錯誤")
+                        st.success("✅ 任務已同步！請在下方打勾後按『同步狀態』。")
+                except Exception as e: st.error(f"寫入雲端失敗：{e}")
+            else: st.error("輸入格式有誤")
 
     with c2:
-        # --- [新增] 手動同步按鈕 ---
+        # [重點] 這裡使用了紅色醒目按鈕
         if st.button("🎯 同步勾選狀態至雲端", use_container_width=True, type="primary"):
             if st.session_state.current_results:
                 sync_all_checked_to_cloud()
-            else:
-                st.warning("請先執行分配。")
+            else: st.warning("請先執行分配並出現卡片。")
 
     with c3:
-        if st.button("🗑️ 清空今日", use_container_width=True):
+        if st.button("🗑️ 清空", use_container_width=True):
             st.session_state.current_results = None
             st.rerun()
 
-    # --- 顯示結果 ---
+    # --- 顯示卡片 ---
     if st.session_state.current_results:
         st.divider()
         for p in st.session_state.current_results:
             with st.container(border=True):
-                st.success(f"### {p['name']} (總計: {p['out']:,})")
-                msg = f"{p['name']}任務：\n" + "\n".join([f"{i+1}. {t['info']} 轉 {t['amount']:,}" for i, t in enumerate(p['tasks'])])
-                st.code(msg, language="text")
+                st.success(f"### {p['name']} (今日總計: {p['out']:,})")
                 for i, t in enumerate(p['tasks']):
-                    # 單純打勾，不觸發任何事
-                    st.checkbox(f"金額 {t['amount']:,} ({t['info']})", key=f"chk_{p['name']}_{t['info']}_{t['amount']}")
+                    t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
+                    # 這裡是關鍵：打勾的狀態會被存在 session_state 裡
+                    st.checkbox(f"金額 {t['amount']:,} ({t['info']})", key=t_key)
 
 with tab2:
     if st.button("🔄 刷新顯示"): st.rerun()
