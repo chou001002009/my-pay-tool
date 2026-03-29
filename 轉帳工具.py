@@ -26,7 +26,7 @@ def parse_data(trans_text, people_text, buffer_val):
     for line in people_text.split('\n'):
         if not line.strip(): continue
         # 優化後的正則表達式：支援「大孟 有 100」或「大孟 , 100」
-        match = re.search(r'(\w+)\s*(?:有|,)\s*(\d+)', line.replace(" ", ""))
+        match = re.search(r'(\w+)\s*(?:,|,)\s*(\d+)', line.replace(" ", ""))
         if match:
             bal = int(match.group(2))
             p_list.append({
