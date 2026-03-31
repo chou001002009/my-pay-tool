@@ -7,7 +7,7 @@ from streamlit_gsheets import GSheetsConnection
 # 1. 網頁基本設定
 st.set_page_config(page_title="Q哥轉帳助手 Pro", page_icon="💸", layout="wide")
 
-# --- 2. 暴力資料清洗工具 ---
+# --- 2. 數據清洗工具 (核心穩定組件) ---
 def clean_num(v):
     if pd.isna(v): return ""
     try:
@@ -41,7 +41,7 @@ def parse_data(trans_text, people_text, buffer_val):
             p_list.append({'name': match.group(1).strip(), 'bal': int(match.group(2)), 'limit': int(match.group(2)) - buffer_val, 'tasks': [], 'out': 0})
     return t_list, p_list, total_needed
 
-# --- 4. 初始化 ---
+# --- 4. 初始化 Session State ---
 if 'current_results' not in st.session_state: st.session_state.current_results = None
 if 'un_results' not in st.session_state: st.session_state.un_results = []
 if 'total_amt' not in st.session_state: st.session_state.total_amt = 0
@@ -52,14 +52,14 @@ with st.sidebar:
     buffer_val = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
     st.divider()
     st.subheader("👥 常用人員勾選")
-    all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運","我"]
+    all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運", "我"]
     selected = st.multiselect("參與人員：", options=all_names, default=all_names)
     if st.button("📝 生成所選人員名單"):
         st.session_state["input_p"] = "\n".join([f"{n} , 0" for n in selected])
         st.rerun()
 
 # --- 6. 主要介面 ---
-st.title("💸 轉帳自動化分配工具")
+st.title("💸 轉帳自動化分配工具 (5筆拆帳上限版)")
 tab1, tab2 = st.tabs(["🚀 開始分配", "📜 雲端歷史紀錄"])
 
 with tab1:
@@ -75,14 +75,33 @@ with tab1:
             if t_list and p_list:
                 t_list.sort(key=lambda x: x['amount'], reverse=True)
                 unassigned = []
+
                 for t in t_list:
+                    remaining_amt = t['amount']
+                    # 每次分配一筆單前，先按剩餘額度重新排人選
                     p_list.sort(key=lambda x: x['limit'], reverse=True)
-                    if p_list[0]['limit'] >= t['amount']:
-                        p_list[0]['tasks'].append(t)
-                        p_list[0]['limit'] -= t['amount']
-                        p_list[0]['out'] += t['amount']
+                    
+                    # 1. 如果第一名就能吃下，直接給他
+                    if p_list[0]['limit'] >= remaining_amt:
+                        p_list[0]['tasks'].append({'info': t['info'], 'amount': remaining_amt})
+                        p_list[0]['limit'] -= remaining_amt
+                        p_list[0]['out'] += remaining_amt
+                        remaining_amt = 0
                     else:
-                        unassigned.append(t)
+                        # 2. 進入拆帳邏輯 (限制最多 5 人分擔)
+                        splits = 0
+                        for p in p_list:
+                            if p['limit'] > 0 and remaining_amt > 0 and splits < 5:
+                                take = min(remaining_amt, p['limit'])
+                                p['tasks'].append({'info': f"{t['info']} (拆)", 'amount': take})
+                                p['limit'] -= take
+                                p['out'] += take
+                                remaining_amt -= take
+                                splits += 1
+                        
+                        # 3. 如果分了 5 個人還剩錢，進未分配
+                        if remaining_amt > 0:
+                            unassigned.append({'info': t['info'], 'amount': remaining_amt})
                 
                 st.session_state.current_results = p_list
                 st.session_state.un_results = unassigned
@@ -96,65 +115,4 @@ with tab1:
                         for t in p['tasks']:
                             new_recs.append({"時間": now, "執行人": p['name'], "帳號": f"'{t['info']}", "金額": t['amount'], "狀態": "未完成"})
                     if new_recs:
-                        ex_df = conn.read(worksheet="Sheet1", ttl=0)
-                        final_df = pd.concat([ex_df, pd.DataFrame(new_recs)], ignore_index=True) if not ex_df.empty else pd.DataFrame(new_recs)
-                        conn.update(worksheet="Sheet1", data=final_df)
-                        st.success(f"✅ 成功分配 {total_amt - sum(u['amount'] for u in unassigned):,} 元，已同步至雲端！")
-                except Exception as e: st.error(f"雲端連線失敗: {e}")
-            else: st.error("輸入格式有誤")
-
-    with c2:
-        if st.button("🎯 同步勾選狀態至雲端", use_container_width=True, type="primary"):
-            if st.session_state.current_results:
-                try:
-                    conn = st.connection("gsheets", type=GSheetsConnection)
-                    df = conn.read(worksheet="Sheet1", ttl=0)
-                    up_cnt = 0
-                    for p in st.session_state.current_results:
-                        for t in p['tasks']:
-                            t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
-                            if st.session_state.get(t_key, False):
-                                m = ((df['執行人'].astype(str).apply(clean_txt) == clean_txt(p['name'])) & (df['帳號'].apply(clean_num) == clean_num(t['info'])) & (df['金額'].apply(clean_num) == clean_num(t['amount'])) & (df['狀態'].str.strip() == "未完成"))
-                                if m.any():
-                                    df.at[df[m].index[-1], '狀態'] = "完成"
-                                    up_cnt += 1
-                    if up_cnt > 0:
-                        conn.update(worksheet="Sheet1", data=df)
-                        st.success(f"🎯 成功同步 {up_cnt} 筆！"); st.rerun()
-                except Exception as e: st.error(f"更新失敗: {e}")
-
-    with c3:
-        if st.button("🗑️ 清空", use_container_width=True):
-            st.session_state.current_results = None; st.session_state.un_results = []; st.rerun()
-
-    # --- 7. 顯示統計資訊與卡片 ---
-    if st.session_state.current_results:
-        st.divider()
-        # 顯示總額統計
-        un_amt = sum(u['amount'] for u in st.session_state.un_results)
-        st.info(f"📊 今日清單總金額：**{st.session_state.total_amt:,}** 元 | 已分配：**{st.session_state.total_amt - un_amt:,}** 元")
-        
-        # 分配卡片
-        for p in st.session_state.current_results:
-            with st.container(border=True):
-                st.success(f"### {p['name']} (今日總計: {p['out']:,})")
-                msg = f"{p['name']}任務：\n" + "\n".join([f"{i+1}. {tk['info']} 轉 {tk['amount']:,}" for i, tk in enumerate(p['tasks'])])
-                st.code(msg, language="text")
-                for tk in p['tasks']:
-                    st.checkbox(f"金額 {tk['amount']:,} ({tk['info']})", key=f"chk_{p['name']}_{tk['info']}_{tk['amount']}")
-
-        # 🚨 [補回] 未分配警示區
-        if st.session_state.un_results:
-            st.divider()
-            st.error(f"⚠️ 額度不足！共有 {len(st.session_state.un_results)} 筆任務未分配：")
-            un_msg = "\n".join([f"{i+1}. {u['info']} 轉 {u['amount']:,}" for i, u in enumerate(st.session_state.un_results)])
-            st.code(f"❌ 尚未分配清單：\n{un_msg}\n---\n待分配總額：{un_amt:,}", language="text")
-            st.warning(f"💡 建議：請補足約 {un_amt:,} 元額度，或調低左側留底金額。")
-
-with tab2:
-    if st.button("🔄 刷新雲端顯示"): st.rerun()
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Sheet1", ttl=0)
-        st.dataframe(df.iloc[::-1], use_container_width=True)
-    except: st.info("尚無雲端資料。")
+                        ex_df = conn.read(worksheet="Sheet1
