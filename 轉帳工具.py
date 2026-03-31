@@ -49,7 +49,7 @@ if 'total_amt' not in st.session_state: st.session_state.total_amt = 0
 # --- 5. 側邊欄 ---
 with st.sidebar:
     st.header("⚙️ 系統設定")
-    buffer_val = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
+    buffer_val = st.slider("每人留底金額", 2000, 10000, 6500, step=500)
     st.divider()
     st.subheader("👥 常用人員勾選")
     all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運", "我"]
@@ -59,7 +59,7 @@ with st.sidebar:
         st.rerun()
 
 # --- 6. 主要介面 ---
-st.title("💸 轉帳自動化分配工具 (精準拆帳版)")
+st.title("💸 轉帳自動化分配工具")
 tab1, tab2 = st.tabs(["🚀 開始分配", "📜 雲端歷史紀錄"])
 
 with tab1:
@@ -73,21 +73,24 @@ with tab1:
         if st.button("🚀 執行分配並同步雲端", use_container_width=True):
             t_list, p_list, total_amt = parse_data(raw_t, raw_p, buffer_val)
             if t_list and p_list:
+                # 按照金額大到小排序，優先處理大單
                 t_list.sort(key=lambda x: x['amount'], reverse=True)
                 unassigned = []
 
                 for t in t_list:
                     remaining_amt = t['amount']
+                    # 每次分配前，重新依據剩餘額度排人選
                     p_list.sort(key=lambda x: x['limit'], reverse=True)
                     
-                    # 邏輯 A: 如果有人可以單獨吃下 (不論金額大小)
+                    # --- 邏輯修正開始 ---
+                    # 1. 優先分配：如果有人可以直接吃下這筆單 (不管金額多少)，就給他轉，不拆帳
                     if p_list[0]['limit'] >= remaining_amt:
                         p_list[0]['tasks'].append({'info': t['info'], 'amount': remaining_amt})
                         p_list[0]['limit'] -= remaining_amt
                         p_list[0]['out'] += remaining_amt
                         remaining_amt = 0
                     else:
-                        # 邏輯 B: 沒人能單獨吃下。檢查是否超過 65000 門檻啟動拆帳
+                        # 2. 沒人能單吃。判斷是否啟動拆帳 (僅限單筆 > 65000)
                         if t['amount'] > 65000:
                             splits = 0
                             for p in p_list:
@@ -98,12 +101,11 @@ with tab1:
                                     p['out'] += take
                                     remaining_amt -= take
                                     splits += 1
-                            
-                            if remaining_amt > 0:
-                                unassigned.append({'info': t['info'], 'amount': remaining_amt})
-                        else:
-                            # 金額 <= 65000 但沒人能單獨吃下，且不允許拆帳
+                        
+                        # 3. 如果金額 <= 65000 但沒人能單吃，或者拆帳 5 筆後還剩錢，進未分配
+                        if remaining_amt > 0:
                             unassigned.append({'info': t['info'], 'amount': remaining_amt})
+                    # --- 邏輯修正結束 ---
                 
                 st.session_state.current_results = p_list
                 st.session_state.un_results = unassigned
@@ -120,7 +122,7 @@ with tab1:
                         ex_df = conn.read(worksheet="Sheet1", ttl=0)
                         final_df = pd.concat([ex_df, pd.DataFrame(new_recs)], ignore_index=True) if not ex_df.empty else pd.DataFrame(new_recs)
                         conn.update(worksheet="Sheet1", data=final_df)
-                        st.success("✅ 分配完成！(僅 >65000 執行拆帳)")
+                        st.success(f"✅ 分配完成，已同步雲端！")
                 except Exception as e: st.error(f"雲端連線失敗: {e}")
             else: st.error("輸入格式有誤")
 
@@ -147,11 +149,11 @@ with tab1:
         if st.button("🗑️ 清空", use_container_width=True):
             st.session_state.current_results = None; st.session_state.un_results = []; st.rerun()
 
-    # --- 7. 顯示結果 ---
+    # --- 7. 顯示結果與統計 ---
     if st.session_state.current_results:
         st.divider()
-        un_amt = sum(u['amount'] for u in st.session_state.un_results)
-        st.info(f"📊 今日總額：**{st.session_state.total_amt:,}** | 已分：**{st.session_state.total_amt - un_amt:,}**")
+        un_amt_sum = sum(u['amount'] for u in st.session_state.un_results)
+        st.info(f"📊 今日總額：**{st.session_state.total_amt:,}** | 已分：**{st.session_state.total_amt - un_amt_sum:,}**")
         
         for p in st.session_state.current_results:
             if p['tasks']:
@@ -162,11 +164,13 @@ with tab1:
                     for tk in p['tasks']:
                         st.checkbox(f"金額 {tk['amount']:,} ({tk['info']})", key=f"chk_{p['name']}_{tk['info']}_{tk['amount']}")
 
+        # 🚨 [修正] 未分配加總顯示
         if st.session_state.un_results:
             st.divider()
-            st.error(f"🚨 以下項目未分配 (金額 <= 65000 不拆帳 或 全員額度不足)：")
-            un_msg = "\n".join([f"帳號 {u['info']} 餘額 {u['amount']:,}" for u in st.session_state.un_results])
-            st.code(un_msg, language="text")
+            st.error(f"⚠️ 尚有未分配總額：**{un_amt_sum:,}** 元")
+            un_msg = "\n".join([f"帳號 {u['info']} 缺口 {u['amount']:,}" for u in st.session_state.un_results])
+            st.code(f"未分配明細：\n{un_msg}", language="text")
+            st.warning(f"💡 建議：請補足約 {un_amt_sum:,} 元額度，或調低左側留底金額。")
 
 with tab2:
     if st.button("🔄 刷新雲端顯示"): st.rerun()
