@@ -49,7 +49,7 @@ if 'total_amt' not in st.session_state: st.session_state.total_amt = 0
 # --- 5. 側邊欄 ---
 with st.sidebar:
     st.header("⚙️ 系統設定")
-    buffer_val = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
+    buffer_val = st.slider("每人留底金額", 2000, 10000, 6500, step=500)
     st.divider()
     st.subheader("👥 常用人員勾選")
     all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運", "我"]
