@@ -163,4 +163,47 @@ with tab1:
                     new_recs = []
                     for p in p_list:
                         for tk in p['tasks']:
-                            new_recs.append({"時間": now, "執行人": p['name'], "帳號": f"'{tk['info
+                            new_recs.append({"時間": now, "執行人": p['name'], "帳號": f"'{tk['info']}", "金額": tk['amount'], "狀態": "未完成"})
+                    if new_recs:
+                        ex_df = conn.read(worksheet="Sheet1", ttl=0)
+                        final_df = pd.concat([ex_df, pd.DataFrame(new_recs)], ignore_index=True) if not ex_df.empty else pd.DataFrame(new_recs)
+                        conn.update(worksheet="Sheet1", data=final_df)
+                        st.success("✅ 分配完成！")
+                except: st.error("雲端連線失敗")
+            else: st.error("格式錯誤")
+
+    with c2:
+        if st.button("🎯 同步勾選狀態至雲端", use_container_width=True, type="primary"):
+            if st.session_state.current_results:
+                sync_all_checked_to_cloud()
+
+    with c3:
+        if st.button("🗑️ 清空", use_container_width=True):
+            st.session_state.current_results = None; st.rerun()
+
+    # --- 顯示與手動微調區 ---
+    if st.session_state.current_results:
+        st.divider()
+        for p_idx, p in enumerate(st.session_state.current_results):
+            if p['tasks']:
+                with st.container(border=True):
+                    st.success(f"### {p['name']} (總計: {p['out']:,})")
+                    for t_idx, tk in enumerate(p['tasks']):
+                        col_chk, col_info, col_amt = st.columns([1, 4, 3])
+                        with col_chk:
+                            st.checkbox("完成", key=f"chk_{p['name']}_{p_idx}_{t_idx}")
+                        with col_info:
+                            st.text_input("帳號", value=tk['info'], key=f"edit_info_{p['name']}_{p_idx}_{t_idx}", label_visibility="collapsed")
+                        with col_amt:
+                            st.number_input("金額", value=int(tk['amount']), step=100, key=f"edit_amt_{p['name']}_{p_idx}_{t_idx}", label_visibility="collapsed")
+
+        if st.session_state.un_results:
+            st.error(f"⚠️ 未分配總額：{sum(u['amount'] for u in st.session_state.un_results):,}")
+
+with tab2:
+    if st.button("🔄 刷新"): st.rerun()
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        st.dataframe(df.iloc[::-1], use_container_width=True)
+    except: st.info("無資料")
