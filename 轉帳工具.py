@@ -55,11 +55,11 @@ with st.sidebar:
     all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運", "我"]
     selected = st.multiselect("參與人員：", options=all_names, default=all_names)
     if st.button("📝 生成所選人員名單"):
-        st.session_state["input_p"] = "\n".join([f"{name} , 0" for name in selected])
+        st.session_state["input_p"] = "\n".join([f"{n} , 0" for n in selected])
         st.rerun()
 
 # --- 6. 主要介面 ---
-st.title("💸 轉帳自動化分配工具")
+st.title("💸 轉帳自動化分配工具 (精準拆帳版)")
 tab1, tab2 = st.tabs(["🚀 開始分配", "📜 雲端歷史紀錄"])
 
 with tab1:
@@ -78,9 +78,100 @@ with tab1:
 
                 for t in t_list:
                     remaining_amt = t['amount']
-                    # 每次分配前先按額度最高者排序
                     p_list.sort(key=lambda x: x['limit'], reverse=True)
                     
-                    # 邏輯 1: 優先分配 (有人能單獨吃下就直接分配，不拆)
+                    # 邏輯 A: 如果有人可以單獨吃下 (不論金額大小)
                     if p_list[0]['limit'] >= remaining_amt:
-                        p_list
+                        p_list[0]['tasks'].append({'info': t['info'], 'amount': remaining_amt})
+                        p_list[0]['limit'] -= remaining_amt
+                        p_list[0]['out'] += remaining_amt
+                        remaining_amt = 0
+                    else:
+                        # 邏輯 B: 沒人能單獨吃下。檢查是否超過 65000 門檻啟動拆帳
+                        if t['amount'] > 65000:
+                            splits = 0
+                            for p in p_list:
+                                if p['limit'] > 0 and remaining_amt > 0 and splits < 5:
+                                    take = min(remaining_amt, p['limit'])
+                                    p['tasks'].append({'info': f"{t['info']} (拆)", 'amount': take})
+                                    p['limit'] -= take
+                                    p['out'] += take
+                                    remaining_amt -= take
+                                    splits += 1
+                            
+                            if remaining_amt > 0:
+                                unassigned.append({'info': t['info'], 'amount': remaining_amt})
+                        else:
+                            # 金額 <= 65000 但沒人能單獨吃下，且不允許拆帳
+                            unassigned.append({'info': t['info'], 'amount': remaining_amt})
+                
+                st.session_state.current_results = p_list
+                st.session_state.un_results = unassigned
+                st.session_state.total_amt = total_amt
+                
+                try:
+                    conn = st.connection("gsheets", type=GSheetsConnection)
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    new_recs = []
+                    for p in p_list:
+                        for tk in p['tasks']:
+                            new_recs.append({"時間": now, "執行人": p['name'], "帳號": f"'{tk['info']}", "金額": tk['amount'], "狀態": "未完成"})
+                    if new_recs:
+                        ex_df = conn.read(worksheet="Sheet1", ttl=0)
+                        final_df = pd.concat([ex_df, pd.DataFrame(new_recs)], ignore_index=True) if not ex_df.empty else pd.DataFrame(new_recs)
+                        conn.update(worksheet="Sheet1", data=final_df)
+                        st.success("✅ 分配完成！(僅 >65000 執行拆帳)")
+                except Exception as e: st.error(f"雲端連線失敗: {e}")
+            else: st.error("輸入格式有誤")
+
+    with c2:
+        if st.button("🎯 同步勾選狀態至雲端", use_container_width=True, type="primary"):
+            if st.session_state.current_results:
+                try:
+                    conn = st.connection("gsheets", type=GSheetsConnection)
+                    df = conn.read(worksheet="Sheet1", ttl=0)
+                    up_cnt = 0
+                    for p in st.session_state.current_results:
+                        for t in p['tasks']:
+                            t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
+                            if st.session_state.get(t_key, False):
+                                m = ((df['執行人'].astype(str).apply(clean_txt) == clean_txt(p['name'])) & (df['帳號'].apply(clean_num) == clean_num(t['info'])) & (df['金額'].apply(clean_num) == clean_num(t['amount'])) & (df['狀態'].str.strip() == "未完成"))
+                                if m.any():
+                                    df.at[df[m].index[-1], '狀態'] = "完成"
+                                    up_cnt += 1
+                    if up_cnt > 0:
+                        conn.update(worksheet="Sheet1", data=df); st.success(f"🎯 成功同步 {up_cnt} 筆！"); st.rerun()
+                except Exception as e: st.error(f"更新失敗: {e}")
+
+    with c3:
+        if st.button("🗑️ 清空", use_container_width=True):
+            st.session_state.current_results = None; st.session_state.un_results = []; st.rerun()
+
+    # --- 7. 顯示結果 ---
+    if st.session_state.current_results:
+        st.divider()
+        un_amt = sum(u['amount'] for u in st.session_state.un_results)
+        st.info(f"📊 今日總額：**{st.session_state.total_amt:,}** | 已分：**{st.session_state.total_amt - un_amt:,}**")
+        
+        for p in st.session_state.current_results:
+            if p['tasks']:
+                with st.container(border=True):
+                    st.success(f"### {p['name']} (今日總計: {p['out']:,})")
+                    msg = f"{p['name']}任務：\n" + "\n".join([f"{i+1}. {tk['info']} 轉 {tk['amount']:,}" for i, tk in enumerate(p['tasks'])])
+                    st.code(msg, language="text")
+                    for tk in p['tasks']:
+                        st.checkbox(f"金額 {tk['amount']:,} ({tk['info']})", key=f"chk_{p['name']}_{tk['info']}_{tk['amount']}")
+
+        if st.session_state.un_results:
+            st.divider()
+            st.error(f"🚨 以下項目未分配 (金額 <= 65000 不拆帳 或 全員額度不足)：")
+            un_msg = "\n".join([f"帳號 {u['info']} 餘額 {u['amount']:,}" for u in st.session_state.un_results])
+            st.code(un_msg, language="text")
+
+with tab2:
+    if st.button("🔄 刷新雲端顯示"): st.rerun()
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        st.dataframe(df.iloc[::-1], use_container_width=True)
+    except: st.info("尚無雲端資料。")
