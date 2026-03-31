@@ -49,7 +49,7 @@ if 'total_amt' not in st.session_state: st.session_state.total_amt = 0
 # --- 5. 側邊欄 ---
 with st.sidebar:
     st.header("⚙️ 系統設定")
-    buffer_val = st.slider("每人留底金額", 2000, 10000, 6500, step=500)
+    buffer_val = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
     st.divider()
     st.subheader("👥 常用人員勾選")
     all_names = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運", "我"]
@@ -59,7 +59,7 @@ with st.sidebar:
         st.rerun()
 
 # --- 6. 主要介面 ---
-st.title("💸 轉帳自動化分配工具")
+st.title("💸 轉帳自動化分配工具 (小額優先版)")
 tab1, tab2 = st.tabs(["🚀 開始分配", "📜 雲端歷史紀錄"])
 
 with tab1:
@@ -73,24 +73,23 @@ with tab1:
         if st.button("🚀 執行分配並同步雲端", use_container_width=True):
             t_list, p_list, total_amt = parse_data(raw_t, raw_p, buffer_val)
             if t_list and p_list:
-                # 按照金額大到小排序，優先處理大單
-                t_list.sort(key=lambda x: x['amount'], reverse=True)
+                # 【邏輯更新】從小額開始分配 (Smallest First)
+                t_list.sort(key=lambda x: x['amount']) 
                 unassigned = []
 
                 for t in t_list:
                     remaining_amt = t['amount']
-                    # 每次分配前，重新依據剩餘額度排人選
+                    # 每次分配前重新按餘額排序，讓最有錢的人先扛
                     p_list.sort(key=lambda x: x['limit'], reverse=True)
                     
-                    # --- 邏輯修正開始 ---
-                    # 1. 優先分配：如果有人可以直接吃下這筆單 (不管金額多少)，就給他轉，不拆帳
+                    # A. 優先檢查：是否有人可以一對一全額吃下
                     if p_list[0]['limit'] >= remaining_amt:
                         p_list[0]['tasks'].append({'info': t['info'], 'amount': remaining_amt})
                         p_list[0]['limit'] -= remaining_amt
                         p_list[0]['out'] += remaining_amt
                         remaining_amt = 0
                     else:
-                        # 2. 沒人能單吃。判斷是否啟動拆帳 (僅限單筆 > 65000)
+                        # B. 沒人能單吃。偵測是否超過 65000 啟動拆帳邏輯
                         if t['amount'] > 65000:
                             splits = 0
                             for p in p_list:
@@ -102,10 +101,9 @@ with tab1:
                                     remaining_amt -= take
                                     splits += 1
                         
-                        # 3. 如果金額 <= 65000 但沒人能單吃，或者拆帳 5 筆後還剩錢，進未分配
+                        # C. 如果依然有剩 (金額<=65000不拆，或拆完5筆還剩錢)，進未分配
                         if remaining_amt > 0:
                             unassigned.append({'info': t['info'], 'amount': remaining_amt})
-                    # --- 邏輯修正結束 ---
                 
                 st.session_state.current_results = p_list
                 st.session_state.un_results = unassigned
@@ -122,7 +120,7 @@ with tab1:
                         ex_df = conn.read(worksheet="Sheet1", ttl=0)
                         final_df = pd.concat([ex_df, pd.DataFrame(new_recs)], ignore_index=True) if not ex_df.empty else pd.DataFrame(new_recs)
                         conn.update(worksheet="Sheet1", data=final_df)
-                        st.success(f"✅ 分配完成，已同步雲端！")
+                        st.success("✅ 分配完成！(小額優先模式)")
                 except Exception as e: st.error(f"雲端連線失敗: {e}")
             else: st.error("輸入格式有誤")
 
@@ -164,13 +162,11 @@ with tab1:
                     for tk in p['tasks']:
                         st.checkbox(f"金額 {tk['amount']:,} ({tk['info']})", key=f"chk_{p['name']}_{tk['info']}_{tk['amount']}")
 
-        # 🚨 [修正] 未分配加總顯示
         if st.session_state.un_results:
             st.divider()
             st.error(f"⚠️ 尚有未分配總額：**{un_amt_sum:,}** 元")
-            un_msg = "\n".join([f"帳號 {u['info']} 缺口 {u['amount']:,}" for u in st.session_state.un_results])
+            un_msg = "\n".join([f"帳號 {u['info']} 餘額 {u['amount']:,}" for u in st.session_state.un_results])
             st.code(f"未分配明細：\n{un_msg}", language="text")
-            st.warning(f"💡 建議：請補足約 {un_amt_sum:,} 元額度，或調低左側留底金額。")
 
 with tab2:
     if st.button("🔄 刷新雲端顯示"): st.rerun()
