@@ -115,4 +115,61 @@ with tab1:
                         for t in p['tasks']:
                             new_recs.append({"時間": now, "執行人": p['name'], "帳號": f"'{t['info']}", "金額": t['amount'], "狀態": "未完成"})
                     if new_recs:
-                        ex_df = conn.read(worksheet="Sheet1
+                        ex_df = conn.read(worksheet="Sheet1", ttl=0)
+                        final_df = pd.concat([ex_df, pd.DataFrame(new_recs)], ignore_index=True) if not ex_df.empty else pd.DataFrame(new_recs)
+                        conn.update(worksheet="Sheet1", data=final_df)
+                        st.success("✅ 任務分配完成！(單筆上限 5 拆)")
+                except Exception as e: st.error(f"雲端同步失敗: {e}")
+            else: st.error("輸入格式有誤")
+
+    with c2:
+        if st.button("🎯 同步勾選狀態至雲端", use_container_width=True, type="primary"):
+            if st.session_state.current_results:
+                try:
+                    conn = st.connection("gsheets", type=GSheetsConnection)
+                    df = conn.read(worksheet="Sheet1", ttl=0)
+                    up_cnt = 0
+                    for p in st.session_state.current_results:
+                        for t in p['tasks']:
+                            t_key = f"chk_{p['name']}_{t['info']}_{t['amount']}"
+                            if st.session_state.get(t_key, False):
+                                m = ((df['執行人'].astype(str).apply(clean_txt) == clean_txt(p['name'])) & (df['帳號'].apply(clean_num) == clean_num(t['info'])) & (df['金額'].apply(clean_num) == clean_num(t['amount'])) & (df['狀態'].str.strip() == "未完成"))
+                                if m.any():
+                                    df.at[df[m].index[-1], '狀態'] = "完成"
+                                    up_cnt += 1
+                    if up_cnt > 0:
+                        conn.update(worksheet="Sheet1", data=df); st.success(f"🎯 成功同步 {up_cnt} 筆！"); st.rerun()
+                except Exception as e: st.error(f"更新失敗: {e}")
+
+    with c3:
+        if st.button("🗑️ 清空", use_container_width=True):
+            st.session_state.current_results = None; st.session_state.un_results = []; st.rerun()
+
+    # --- 7. 顯示統計資訊與卡片 ---
+    if st.session_state.current_results:
+        st.divider()
+        un_amt = sum(u['amount'] for u in st.session_state.un_results)
+        st.info(f"📊 今日總額：**{st.session_state.total_amt:,}** | 已分：**{st.session_state.total_amt - un_amt:,}**")
+        
+        for p in st.session_state.current_results:
+            if p['tasks']:
+                with st.container(border=True):
+                    st.success(f"### {p['name']} (總計: {p['out']:,})")
+                    msg = f"{p['name']}任務：\n" + "\n".join([f"{i+1}. {tk['info']} 轉 {tk['amount']:,}" for i, tk in enumerate(p['tasks'])])
+                    st.code(msg, language="text")
+                    for tk in p['tasks']:
+                        st.checkbox(f"金額 {tk['amount']:,} ({tk['info']})", key=f"chk_{p['name']}_{tk['info']}_{tk['amount']}")
+
+        if st.session_state.un_results:
+            st.divider()
+            st.error(f"🚨 額度用盡或超過拆分上限 (5筆)：")
+            un_msg = "\n".join([f"帳號 {u['info']} 剩餘未分 {u['amount']:,}" for u in st.session_state.un_results])
+            st.code(un_msg, language="text")
+
+with tab2:
+    if st.button("🔄 刷新雲端顯示"): st.rerun()
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        st.dataframe(df.iloc[::-1], use_container_width=True)
+    except: st.info("尚無雲端資料。")
