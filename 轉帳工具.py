@@ -7,7 +7,7 @@ from streamlit_gsheets import GSheetsConnection
 # 1. 網頁基本設定
 st.set_page_config(page_title="Q哥轉帳助手 Pro", page_icon="💸", layout="wide")
 
-# --- 2. 數據清洗工具 (核心穩定組件) ---
+# --- 2. 數據清洗工具 ---
 def clean_num(v):
     if pd.isna(v): return ""
     try:
@@ -59,7 +59,7 @@ with st.sidebar:
         st.rerun()
 
 # --- 6. 主要介面 ---
-st.title("💸 轉帳自動化分配工具 (5筆拆帳上限版)")
+st.title("💸 轉帳自動化分配工具 (精準拆帳版)")
 tab1, tab2 = st.tabs(["🚀 開始分配", "📜 雲端歷史紀錄"])
 
 with tab1:
@@ -78,29 +78,31 @@ with tab1:
 
                 for t in t_list:
                     remaining_amt = t['amount']
-                    # 每次分配一筆單前，先按剩餘額度重新排人選
                     p_list.sort(key=lambda x: x['limit'], reverse=True)
                     
-                    # 1. 如果第一名就能吃下，直接給他
+                    # 邏輯 A: 如果有人可以單獨吃下 (不論金額大小)
                     if p_list[0]['limit'] >= remaining_amt:
                         p_list[0]['tasks'].append({'info': t['info'], 'amount': remaining_amt})
                         p_list[0]['limit'] -= remaining_amt
                         p_list[0]['out'] += remaining_amt
                         remaining_amt = 0
                     else:
-                        # 2. 進入拆帳邏輯 (限制最多 5 人分擔)
-                        splits = 0
-                        for p in p_list:
-                            if p['limit'] > 0 and remaining_amt > 0 and splits < 5:
-                                take = min(remaining_amt, p['limit'])
-                                p['tasks'].append({'info': f"{t['info']} (拆)", 'amount': take})
-                                p['limit'] -= take
-                                p['out'] += take
-                                remaining_amt -= take
-                                splits += 1
-                        
-                        # 3. 如果分了 5 個人還剩錢，進未分配
-                        if remaining_amt > 0:
+                        # 邏輯 B: 沒人能單獨吃下。檢查是否超過 65000 門檻啟動拆帳
+                        if t['amount'] > 65000:
+                            splits = 0
+                            for p in p_list:
+                                if p['limit'] > 0 and remaining_amt > 0 and splits < 5:
+                                    take = min(remaining_amt, p['limit'])
+                                    p['tasks'].append({'info': f"{t['info']} (拆)", 'amount': take})
+                                    p['limit'] -= take
+                                    p['out'] += take
+                                    remaining_amt -= take
+                                    splits += 1
+                            
+                            if remaining_amt > 0:
+                                unassigned.append({'info': t['info'], 'amount': remaining_amt})
+                        else:
+                            # 金額 <= 65000 但沒人能單獨吃下，且不允許拆帳
                             unassigned.append({'info': t['info'], 'amount': remaining_amt})
                 
                 st.session_state.current_results = p_list
@@ -112,14 +114,14 @@ with tab1:
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     new_recs = []
                     for p in p_list:
-                        for t in p['tasks']:
-                            new_recs.append({"時間": now, "執行人": p['name'], "帳號": f"'{t['info']}", "金額": t['amount'], "狀態": "未完成"})
+                        for tk in p['tasks']:
+                            new_recs.append({"時間": now, "執行人": p['name'], "帳號": f"'{tk['info']}", "金額": tk['amount'], "狀態": "未完成"})
                     if new_recs:
                         ex_df = conn.read(worksheet="Sheet1", ttl=0)
                         final_df = pd.concat([ex_df, pd.DataFrame(new_recs)], ignore_index=True) if not ex_df.empty else pd.DataFrame(new_recs)
                         conn.update(worksheet="Sheet1", data=final_df)
-                        st.success("✅ 任務分配完成！(單筆上限 5 拆)")
-                except Exception as e: st.error(f"雲端同步失敗: {e}")
+                        st.success("✅ 分配完成！(僅 >65000 執行拆帳)")
+                except Exception as e: st.error(f"雲端連線失敗: {e}")
             else: st.error("輸入格式有誤")
 
     with c2:
@@ -145,7 +147,7 @@ with tab1:
         if st.button("🗑️ 清空", use_container_width=True):
             st.session_state.current_results = None; st.session_state.un_results = []; st.rerun()
 
-    # --- 7. 顯示統計資訊與卡片 ---
+    # --- 7. 顯示結果 ---
     if st.session_state.current_results:
         st.divider()
         un_amt = sum(u['amount'] for u in st.session_state.un_results)
@@ -154,7 +156,7 @@ with tab1:
         for p in st.session_state.current_results:
             if p['tasks']:
                 with st.container(border=True):
-                    st.success(f"### {p['name']} (總計: {p['out']:,})")
+                    st.success(f"### {p['name']} (今日總計: {p['out']:,})")
                     msg = f"{p['name']}任務：\n" + "\n".join([f"{i+1}. {tk['info']} 轉 {tk['amount']:,}" for i, tk in enumerate(p['tasks'])])
                     st.code(msg, language="text")
                     for tk in p['tasks']:
@@ -162,8 +164,8 @@ with tab1:
 
         if st.session_state.un_results:
             st.divider()
-            st.error(f"🚨 額度用盡或超過拆分上限 (5筆)：")
-            un_msg = "\n".join([f"帳號 {u['info']} 剩餘未分 {u['amount']:,}" for u in st.session_state.un_results])
+            st.error(f"🚨 以下項目未分配 (金額 <= 65000 不拆帳 或 全員額度不足)：")
+            un_msg = "\n".join([f"帳號 {u['info']} 餘額 {u['amount']:,}" for u in st.session_state.un_results])
             st.code(un_msg, language="text")
 
 with tab2:
