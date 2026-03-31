@@ -67,7 +67,6 @@ with tab1:
     with col1: raw_t = st.text_area("📋 1. 貼上轉帳清單", height=150, key="raw_t_in")
     with col2: raw_p = st.text_area("👥 2. 輸入人員餘額", height=150, key="input_p")
 
-    # 按鈕列 (拆分為 1.計算 2.上傳 3.同步 4.清空)
     btn_c1, btn_c2, btn_c3, btn_c4 = st.columns([2, 2, 2, 1])
     
     with btn_c1:
@@ -113,7 +112,7 @@ with tab1:
                         final_df = pd.concat([ex_df, pd.DataFrame(new_recs)], ignore_index=True) if not ex_df.empty else pd.DataFrame(new_recs)
                         conn.update(worksheet="Sheet1", data=final_df)
                         st.session_state.uploaded = True
-                        st.success("✅ 最終結果已上傳雲端！")
+                        st.success("✅ 最終結果已同步至雲端！")
                 except Exception as e: st.error(f"上傳失敗: {e}")
             else: st.warning("請先執行分配！")
 
@@ -134,10 +133,10 @@ with tab1:
                                     idx = df[mask].index[-1]
                                     df.at[idx, '狀態'] = "完成"; df.at[idx, '執行人'] = p['name']; up_cnt += 1
                     if up_cnt > 0:
-                        conn.update(worksheet="Sheet1", data=df); st.success(f"🎯 同步完成 {up_cnt} 筆！"); st.rerun()
+                        conn.update(worksheet="Sheet1", data=df); st.success(f"🎯 同步成功 {up_cnt} 筆！"); st.rerun()
                     else: st.info("無勾選項目。")
                 except Exception as e: st.error(f"同步失敗: {e}")
-            else: st.warning("請先執行第 2 步上傳！")
+            else: st.warning("請先完成第 2 步上傳！")
 
     with btn_c4:
         if st.button("🗑️ 清空", use_container_width=True):
@@ -154,24 +153,27 @@ with tab1:
             if p['tasks']:
                 with st.container(border=True):
                     st.success(f"### {p['name']} (今日轉出: {p['out']:,})")
-                    
-                    # 【核心回歸】訊息複製框：隨時反映目前的微調結果
+                    # 訊息複製框
                     copy_msg = f"{p['name']}今日任務：\n" + "\n".join([f"{i+1}. {tk['info']} 轉 {tk['amount']:,}" for i, tk in enumerate(p['tasks'])])
                     st.code(copy_msg, language="text")
                     
-                    # 每一筆的詳細控制項
                     for t_idx, tk in enumerate(p['tasks']):
                         c_chk, c_txt, c_sel = st.columns([1, 4, 2])
                         with c_chk: st.checkbox("完", key=f"chk_{tk['info']}_{tk['amount']}")
                         with c_txt: st.write(f"**{tk['amount']:,}** ({tk['info']})")
                         with c_sel:
-                            new_owner = st.selectbox("指派", options=all_names_list, index=all_names_list.index(p['name']), key=f"mv_{tk['info']}_{p['name']}_{t_idx}", label_visibility="collapsed")
+                            # 強化後的搬移邏輯
+                            new_owner = st.selectbox("指派", options=all_names_list, index=all_names_list.index(p['name']) if p['name'] in all_names_list else 0, key=f"mv_{tk['info']}_{p['name']}_{t_idx}", label_visibility="collapsed")
                             if new_owner != p['name']:
                                 task = results[p_idx]['tasks'].pop(t_idx)
                                 results[p_idx]['out'] -= task['amount']
+                                found = False
                                 for target in results:
                                     if target['name'] == new_owner:
-                                        target['tasks'].append(task); target['out'] += task['amount']; break
+                                        target['tasks'].append(task); target['out'] += task['amount']; found = True; break
+                                # 如果新指派的人不在原本的餘額名單內，幫他創一個資料空間
+                                if not found:
+                                    results.append({'name': new_owner, 'bal': 0, 'limit': -999999, 'tasks': [task], 'out': task['amount']})
                                 st.session_state.current_results = results; st.rerun()
 
         # 未分配警示區
@@ -187,9 +189,12 @@ with tab1:
                         target_name = st.selectbox("指派給", options=["--請選擇--"] + all_names_list, key=f"u_as_{u_idx}_{u['amount']}", label_visibility="collapsed")
                         if target_name != "--請選擇--":
                             task = un_list.pop(u_idx)
+                            found = False
                             for target_p in results:
                                 if target_p['name'] == target_name:
-                                    target_p['tasks'].append(task); target_p['out'] += task['amount']; break
+                                    target_p['tasks'].append(task); target_p['out'] += task['amount']; found = True; break
+                            if not found:
+                                results.append({'name': target_name, 'bal': 0, 'limit': -999999, 'tasks': [task], 'out': task['amount']})
                             st.session_state.un_results = un_list; st.session_state.current_results = results; st.rerun()
                     with c_usplit:
                         if st.button("強制拆帳", key=f"u_sp_{u_idx}"):
