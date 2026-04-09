@@ -47,12 +47,12 @@ if 'un_results' not in st.session_state: st.session_state.un_results = []
 if 'total_amt' not in st.session_state: st.session_state.total_amt = 0
 if 'uploaded' not in st.session_state: st.session_state.uploaded = False
 
-all_names_list = ["大孟", "柏盛", "阿廷", "安妮", "宜峰", "育銘", "鴻運", "我"]
+all_names_list = ["大孟", "柏盛", "阿廷", "宜峰", "育銘", "鴻運", "我"]
 
 # --- 5. 側邊欄 ---
 with st.sidebar:
     st.header("⚙️ 系統設定")
-    buffer_val = st.slider("每人留底金額", 5000, 10000, 6500, step=500)
+    buffer_val = st.slider("每人留底金額", 2000, 10000, 6500, step=500)
     selected_ppl = st.multiselect("參與人員：", options=all_names_list, default=all_names_list)
     if st.button("📝 生成所選人員名單"):
         st.session_state["input_p"] = "\n".join([f"{n} , 0" for n in selected_ppl])
